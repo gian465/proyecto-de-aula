@@ -1,0 +1,186 @@
+/*
+ * Ejercicio 3 - Sistema de autenticación con patrón táctil
+ * 
+ * 1. Desarrolla un sistema de autenticación basado en un patrón táctil.
+ * 2. El usuario debe tocar la secuencia en un pin táctil:
+ *    (a) 3 toques largos.
+ *    (b) 3 toques cortos.
+ *    (c) 3 toques largos.
+ * 3. Luego de hacer esa secuencia, se debe tocar otro pin táctil para validar
+ *    la secuencia.
+ * 4. Imprimir por serial "APROBADO" o "NO APROBADO" si la secuencia ingresada
+ *    es correcta o no.
+ * 5. Por grupo definir el tiempo a su criterio para determinar que es "toque
+ *    largo" y por "toque corto".
+ */
+
+#include <stdio.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "driver/touch_pad.h"
+#include "esp_log.h"
+
+// Definición de pines táctiles
+#define PIN_ENTRADA TOUCH_PAD_NUM2   // Pin para la secuencia (T2 - GPIO2)
+#define PIN_VALIDAR TOUCH_PAD_NUM3   // Pin para validar (T3 - GPIO15)
+
+// Umbrales para detectar toques
+#define UMBRAL_TOQUE 300             // Umbral para detectar un toque
+
+// Tiempos para distinguir entre toques cortos y largos (en milisegundos)
+#define TIEMPO_LARGO 2000            // 2 segundos o más para un toque largo
+#define TIEMPO_CORTO 500             // Menos de 0.5 segundos para un toque corto
+
+// Estados del sistema
+typedef enum {
+    ESPERANDO_INICIO,        // Esperando que comience la secuencia
+    CAPTURANDO_SECUENCIA,    // Capturando la secuencia de toques
+    VALIDANDO                // Esperando que se toque el pin de validación
+} estado_t;
+
+// Tipos de toques
+typedef enum {
+    TOQUE_CORTO,
+    TOQUE_LARGO,
+    NO_TOQUE
+} tipo_toque_t;
+
+void app_main() {
+    // Variables para el sistema
+    estado_t estado = ESPERANDO_INICIO;
+    tipo_toque_t secuencia_ingresada[9]; // Para almacenar la secuencia de 9 toques
+    int indice_secuencia = 0;            // Índice actual en la secuencia
+    int64_t tiempo_inicio_toque = 0;      // Para medir la duración del toque
+    bool tocando = false;                // Indica si se está tocando el sensor
+    uint16_t valor_pin_entrada;           // Valor del pin de entrada
+    uint16_t valor_pin_validar;           // Valor del pin de validación
+    
+    // Secuencia correcta: 3 largos, 3 cortos, 3 largos
+    tipo_toque_t secuencia_correcta[9] = {
+        TOQUE_LARGO, TOQUE_LARGO, TOQUE_LARGO,
+        TOQUE_CORTO, TOQUE_CORTO, TOQUE_CORTO,
+        TOQUE_LARGO, TOQUE_LARGO, TOQUE_LARGO
+    };
+    
+    // Inicializar los pines táctiles
+    ESP_ERROR_CHECK(touch_pad_init());
+    
+    // Configurar los pines táctiles
+    ESP_ERROR_CHECK(touch_pad_config(PIN_ENTRADA, 0));
+    ESP_ERROR_CHECK(touch_pad_config(PIN_VALIDAR, 0));
+    
+    // Calibrar valores iniciales (obtener línea base)
+    printf("Calibrando sensores táctiles. No toque los pines por favor...\n");
+    vTaskDelay(2000 / portTICK_PERIOD_MS);
+    
+    uint16_t valor_base_entrada, valor_base_validar;
+    touch_pad_read(PIN_ENTRADA, &valor_base_entrada);
+    touch_pad_read(PIN_VALIDAR, &valor_base_validar);
+    
+    printf("Calibración completada:\n");
+    printf("Valor base pin entrada: %d\n", valor_base_entrada);
+    printf("Valor base pin validar: %d\n", valor_base_validar);
+    printf("\nSistema de autenticación iniciado.\n");
+    printf("Patrón requerido: 3 toques largos, 3 toques cortos, 3 toques largos.\n");
+    printf("Toque largo: mantener presionado %d ms o más.\n", TIEMPO_LARGO);
+    printf("Toque corto: mantener presionado menos de %d ms.\n", TIEMPO_CORTO);
+    printf("Ingrese la secuencia y luego toque el pin de validación.\n\n");
+    
+    // Loop principal
+    while (1) {
+        // Leemos los valores de los pines táctiles
+        touch_pad_read(PIN_ENTRADA, &valor_pin_entrada);
+        touch_pad_read(PIN_VALIDAR, &valor_pin_validar);
+        
+        // Detectamos si el pin de entrada está siendo tocado
+        bool pin_entrada_tocado = (valor_base_entrada - valor_pin_entrada) > UMBRAL_TOQUE;
+        
+        // Detectamos si el pin de validación está siendo tocado
+        bool pin_validar_tocado = (valor_base_validar - valor_pin_validar) > UMBRAL_TOQUE;
+        
+        // Máquina de estados para el sistema de autenticación
+        switch (estado) {
+            case ESPERANDO_INICIO:
+                // Si se toca el pin de entrada, comenzamos a capturar la secuencia
+                if (pin_entrada_tocado && !tocando) {
+                    printf("Iniciando captura de secuencia...\n");
+                    indice_secuencia = 0;
+                    tocando = true;
+                    tiempo_inicio_toque = esp_timer_get_time() / 1000; // Convertir a milisegundos
+                    estado = CAPTURANDO_SECUENCIA;
+                }
+                break;
+                
+            case CAPTURANDO_SECUENCIA:
+                // Si estábamos tocando y ya no
+                if (tocando && !pin_entrada_tocado) {
+                    // Calculamos la duración del toque
+                    int64_t duracion = (esp_timer_get_time() / 1000) - tiempo_inicio_toque;
+                    
+                    // Determinamos el tipo de toque
+                    tipo_toque_t tipo;
+                    if (duracion >= TIEMPO_LARGO) {
+                        tipo = TOQUE_LARGO;
+                        printf("Toque LARGO detectado (%lld ms)\n", duracion);
+                    } else if (duracion >= TIEMPO_CORTO) {
+                        tipo = TOQUE_CORTO;
+                        printf("Toque CORTO detectado (%lld ms)\n", duracion);
+                    } else {
+                        // Si es muy corto, lo consideramos ruido
+                        printf("Toque demasiado corto, ignorado (%lld ms)\n", duracion);
+                        tocando = false;
+                        break;
+                    }
+                    
+                    // Guardamos el toque en la secuencia
+                    if (indice_secuencia < 9) {
+                        secuencia_ingresada[indice_secuencia] = tipo;
+                        indice_secuencia++;
+                        
+                        // Si ya completamos los 9 toques
+                        if (indice_secuencia == 9) {
+                            printf("Secuencia completa. Toque el pin de validación.\n");
+                            estado = VALIDANDO;
+                        }
+                    }
+                    
+                    tocando = false;
+                }
+                // Si no estábamos tocando y ahora sí
+                else if (!tocando && pin_entrada_tocado) {
+                    tocando = true;
+                    tiempo_inicio_toque = esp_timer_get_time() / 1000; // Convertir a milisegundos
+                }
+                break;
+                
+            case VALIDANDO:
+                // Si se toca el pin de validación
+                if (pin_validar_tocado) {
+                    // Verificamos si la secuencia ingresada es correcta
+                    bool secuencia_correcta_flag = true;
+                    
+                    for (int i = 0; i < 9; i++) {
+                        if (secuencia_ingresada[i] != secuencia_correcta[i]) {
+                            secuencia_correcta_flag = false;
+                            break;
+                        }
+                    }
+                    
+                    // Mostramos el resultado
+                    if (secuencia_correcta_flag) {
+                        printf("\n** APROBADO **\n\n");
+                    } else {
+                        printf("\n** NO APROBADO **\n\n");
+                    }
+                    
+                    // Volvemos al estado inicial
+                    estado = ESPERANDO_INICIO;
+                    vTaskDelay(1000 / portTICK_PERIOD_MS); // Esperamos un segundo para evitar rebotes
+                }
+                break;
+        }
+        
+        // Pequeña pausa para no saturar el CPU
+        vTaskDelay(50 / portTICK_PERIOD_MS);
+    }
+}
