@@ -1,0 +1,124 @@
+/*
+ * Ejercicio 1 - Telemetría de caudalímetro
+ * 
+ * En un proyecto de telemetría se tiene un caudalímetro que envía por puerto
+ * serial cada periodo de tiempo la cantidad de caudal detecta, el cual es un
+ * número entero no mayor de 2 dígitos (es decir, se enviará un número entre
+ * 00 y 99)
+ * 
+ * Se recibirá el número por puerto serial, se debe imprimir por serial la
+ * siguiente información:
+ * 1. El número mínimo recibido.
+ * 2. El número mayor recibido.
+ * 3. El último número recibido.
+ * 4. El promedio de todos los números recibidos.
+ */
+
+#include <stdio.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "driver/uart.h"
+#include "driver/gpio.h"
+#include "sdkconfig.h"
+#include "esp_log.h"
+
+// Definición de pines UART
+#define UART_NUM UART_NUM_0
+#define BUF_SIZE 1024
+
+void app_main() {
+    // Variables para almacenar los datos estadísticos
+    int ultimo = 0;
+    int minimo = 99;  // Inicializamos con el valor máximo posible
+    int maximo = 0;
+    float suma = 0;
+    int contador = 0;
+    char dato_recibido[3];  // Para almacenar hasta 2 dígitos y el caracter nulo
+    int indice = 0;
+    
+    // Configuración de UART
+    uart_config_t uart_config = {
+        .baud_rate = 115200,
+        .data_bits = UART_DATA_8_BITS,
+        .parity = UART_PARITY_DISABLE,
+        .stop_bits = UART_STOP_BITS_1,
+        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE
+    };
+    
+    // Instalamos el driver UART
+    ESP_ERROR_CHECK(uart_param_config(UART_NUM, &uart_config));
+    ESP_ERROR_CHECK(uart_set_pin(UART_NUM, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
+    ESP_ERROR_CHECK(uart_driver_install(UART_NUM, BUF_SIZE, BUF_SIZE, 0, NULL, 0));
+    
+    // Buffer para recibir datos
+    uint8_t data[128];
+    
+    printf("Esperando datos del caudalímetro...\n");
+    
+    while (1) {
+        // Leemos datos del puerto serial
+        int len = uart_read_bytes(UART_NUM, data, sizeof(data), 20 / portTICK_PERIOD_MS);
+        
+        if (len > 0) {
+            // Procesamos cada byte recibido
+            for (int i = 0; i < len; i++) {
+                char c = (char)data[i];
+                
+                // Verificamos si es un dígito
+                if (c >= '0' && c <= '9') {
+                    // Si todavía no tenemos 2 dígitos, lo agregamos
+                    if (indice < 2) {
+                        dato_recibido[indice] = c;
+                        indice++;
+                    }
+                } 
+                // Si recibimos un salto de línea o retorno de carro, procesamos el número
+                else if (c == '\n' || c == '\r') {
+                    // Si hemos recibido algún dígito
+                    if (indice > 0) {
+                        // Añadimos el caracter nulo para convertir a entero
+                        dato_recibido[indice] = '\0';
+                        
+                        // Convertimos a entero
+                        int valor = atoi(dato_recibido);
+                        
+                        // Verificamos si está en el rango válido (0-99)
+                        if (valor >= 0 && valor <= 99) {
+                            // Actualizamos estadísticas
+                            ultimo = valor;
+                            
+                            // En el primer dato recibido, actualizamos el mínimo
+                            if (contador == 0) {
+                                minimo = valor;
+                            } else {
+                                // Actualizamos el mínimo si el valor es menor
+                                if (valor < minimo) {
+                                    minimo = valor;
+                                }
+                            }
+                            
+                            // Actualizamos el máximo si el valor es mayor
+                            if (valor > maximo) {
+                                maximo = valor;
+                            }
+                            
+                            // Actualizamos suma y contador para el promedio
+                            suma += valor;
+                            contador++;
+                            
+                            // Mostramos las estadísticas
+                            printf("Último: %d. Minimo: %d. Máximo: %d. Promedio: %.2f.\n", 
+                                   ultimo, minimo, maximo, suma / contador);
+                        }
+                        
+                        // Reiniciamos el índice para la próxima lectura
+                        indice = 0;
+                    }
+                }
+            }
+        }
+        
+        // Pequeña pausa para no saturar el CPU
+        vTaskDelay(10 / portTICK_PERIOD_MS);
+    }
+}
