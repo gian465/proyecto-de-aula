@@ -1,0 +1,25 @@
+flowchart TD
+    A[Inicio] --> B[Inicializar variables:\nultimo=0, minimo=99,\nmaximo=0, suma=0, contador=0]
+    B --> C[Configurar UART]
+    C --> D[Instalar driver UART]
+    D --> E[Esperar datos del caudalímetro]
+    E --> F{Datos recibidos?}
+    F -->|No| E
+    F -->|Sí| G[Procesar cada byte]
+    G --> H{Es dígito?}
+    H -->|Sí| I[Agregar a dato_recibido]
+    H -->|No| J{Es \n o \r?}
+    J -->|No| N
+    J -->|Sí| K{Hay dígitos\nrecibidos?}
+    K -->|No| N
+    K -->|Sí| L[Convertir a entero]
+    L --> M{Valor entre\n0 y 99?}
+    M -->|No| P
+    M -->|Sí| O[Actualizar estadísticas:\nultimo = valor\nVerificar y actualizar mínimo\nVerificar y actualizar máximo\nsuma += valor\ncontador++]
+    O --> Q[Mostrar estadísticas:\nÚltimo, Mínimo, Máximo, Promedio]
+    Q --> P[Reiniciar índice para\npróxima lectura]
+    P --> N[Continuar con siguiente byte]
+    N --> R{Todos los bytes\nprocesados?}
+    R -->|No| G
+    R -->|Sí| S[Pequeña pausa]
+    S --> E
