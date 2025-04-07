@@ -1,0 +1,118 @@
+/*
+ * Ejercicio 2 - Cálculo del cuadrado de un número
+ * 
+ * 1. Se puede calcular el cuadrado de un número N al sumar los N primeros
+ *    números impares, así 7 al cuadrado es igual a 1+3+5+7+9+11+13=49,
+ *    donde la serie del 1 al 13 son los primeros 7 números impares.
+ * 2. Describir una solución para el microcontrolador que calcule el cuadrado
+ *    de un número recibido por puerto serial e imprima el resultado por
+ *    serial.
+ * 3. Si se recibe algo diferente a un número entero se debe ignorar.
+ */
+
+#include <stdio.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "driver/uart.h"
+#include "driver/gpio.h"
+#include "sdkconfig.h"
+#include "esp_log.h"
+
+// Definición de pines UART
+#define UART_NUM UART_NUM_0
+#define BUF_SIZE 1024
+
+// Función para calcular el cuadrado usando la suma de números impares
+int calcular_cuadrado(int n) {
+    int resultado = 0;
+    int numero_impar = 1;
+    
+    printf("Calculando %d al cuadrado usando la suma de impares:\n", n);
+    printf("%d² = ", n);
+    
+    // Sumamos los primeros n números impares
+    for (int i = 0; i < n; i++) {
+        resultado += numero_impar;
+        
+        // Imprimimos cada número impar que sumamos
+        if (i > 0) {
+            printf(" + ");
+        }
+        printf("%d", numero_impar);
+        
+        // Siguiente número impar
+        numero_impar += 2;
+    }
+    
+    printf(" = %d\n", resultado);
+    return resultado;
+}
+
+void app_main() {
+    // Datos para recibir el número
+    char numero_str[20];  // Para almacenar los dígitos recibidos
+    int indice = 0;
+    
+    // Configuración de UART
+    uart_config_t uart_config = {
+        .baud_rate = 115200,
+        .data_bits = UART_DATA_8_BITS,
+        .parity = UART_PARITY_DISABLE,
+        .stop_bits = UART_STOP_BITS_1,
+        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE
+    };
+    
+    // Instalamos el driver UART
+    ESP_ERROR_CHECK(uart_param_config(UART_NUM, &uart_config));
+    ESP_ERROR_CHECK(uart_set_pin(UART_NUM, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
+    ESP_ERROR_CHECK(uart_driver_install(UART_NUM, BUF_SIZE, BUF_SIZE, 0, NULL, 0));
+    
+    // Buffer para recibir datos
+    uint8_t data[128];
+    
+    printf("Calculadora de cuadrados usando suma de impares\n");
+    printf("Ingrese un número entero y presione Enter:\n");
+    
+    while (1) {
+        // Leemos datos del puerto serial
+        int len = uart_read_bytes(UART_NUM, data, sizeof(data), 20 / portTICK_PERIOD_MS);
+        
+        if (len > 0) {
+            // Procesamos cada byte recibido
+            for (int i = 0; i < len; i++) {
+                char c = (char)data[i];
+                
+                // Verificamos si es un dígito o un signo negativo al inicio
+                if ((c >= '0' && c <= '9') || (c == '-' && indice == 0)) {
+                    // Si todavía no tenemos demasiados dígitos, lo agregamos
+                    if (indice < sizeof(numero_str) - 1) {
+                        numero_str[indice] = c;
+                        indice++;
+                    }
+                } 
+                // Si recibimos un salto de línea o retorno de carro, procesamos el número
+                else if (c == '\n' || c == '\r') {
+                    // Si hemos recibido algún dígito
+                    if (indice > 0) {
+                        // Añadimos el caracter nulo para convertir a entero
+                        numero_str[indice] = '\0';
+                        
+                        // Convertimos a entero
+                        int numero = atoi(numero_str);
+                        
+                        // Calculamos e imprimimos el cuadrado
+                        int cuadrado = calcular_cuadrado(numero);
+                        printf("El cuadrado de %d es %d\n", numero, cuadrado);
+                        printf("\nIngrese otro número entero:\n");
+                        
+                        // Reiniciamos el índice para la próxima lectura
+                        indice = 0;
+                    }
+                }
+            }
+        }
+        
+        // Pequeña pausa para no saturar el CPU
+        vTaskDelay(10 / portTICK_PERIOD_MS);
+    }
+}
